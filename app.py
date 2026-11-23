@@ -150,7 +150,7 @@ def make_pdf(data, materials, costs, inference):
         alignment=TA_CENTER, fontSize=17, leading=21, spaceAfter=5
     ))
     story = [
-        Paragraph("AI Smart HPP Calculator", styles["AppTitle"]),
+        Paragraph("Smart HPP Calculator", styles["AppTitle"]),
         Paragraph("Laporan Perhitungan Harga Pokok Produksi", styles["Heading2"]),
         Paragraph(f"Tanggal laporan: {datetime.now().strftime('%d-%m-%Y %H:%M')}", styles["Normal"]),
         Spacer(1, 8),
