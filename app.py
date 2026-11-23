@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="AI Smart HPP Calculator",
+    page_title="Smart HPP Calculator",
     page_icon="🧮",
     layout="wide",
     initial_sidebar_state="expanded",
