@@ -1,12 +1,18 @@
 import io
 import math
 import re
+import base64
 from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 import pytesseract
+
+try:
+    from st_img_pastebutton import paste as paste_image_from_clipboard
+except ImportError:
+    paste_image_from_clipboard = None
 
 
 st.set_page_config(
@@ -565,17 +571,44 @@ with comp_tab_upload:
         placeholder=f"Kosongkan untuk menggunakan {default_competitor}",
         key="simple_competitor_name",
     )
+    st.markdown("**Cara 1 — Copy & Paste foto (tanpa download)**")
+    st.caption("Salin gambar menu dari browser atau aplikasi, lalu klik tombol paste di bawah. Browser mungkin meminta izin akses clipboard.")
+    pasted_image_data = None
+    if paste_image_from_clipboard is not None:
+        try:
+            pasted_image_data = paste_image_from_clipboard(
+                label="📋 Paste Foto dari Clipboard",
+                key="competitor_menu_clipboard_paste",
+            )
+        except Exception as exc:
+            st.warning(f"Fitur paste clipboard tidak tersedia di browser ini: {exc}")
+    else:
+        st.info("Fitur paste belum terpasang. Gunakan upload foto sementara.")
+
+    st.markdown("**Cara 2 — Upload foto dari perangkat**")
     uploaded_menu_image = st.file_uploader(
-        "Pilih foto menu",
+        "Pilih foto menu (opsional jika sudah paste)",
         type=["png", "jpg", "jpeg", "webp"],
         accept_multiple_files=False,
         key="simple_competitor_menu_photo",
         help="Gunakan foto yang jelas, tidak miring, dan menampilkan nama menu serta harga.",
     )
 
-    if uploaded_menu_image is not None:
+    image = None
+    image_source_name = "Foto dari clipboard"
+    if pasted_image_data:
+        try:
+            encoded_part = pasted_image_data.split(",", 1)[1] if "," in pasted_image_data else pasted_image_data
+            pasted_bytes = base64.b64decode(encoded_part)
+            image = Image.open(io.BytesIO(pasted_bytes)).convert("RGB")
+        except Exception as exc:
+            st.error(f"Gambar dari clipboard tidak dapat dibaca: {exc}")
+    elif uploaded_menu_image is not None:
         image = Image.open(uploaded_menu_image).convert("RGB")
-        st.image(image, caption="Foto menu yang dipilih", use_container_width=True)
+        image_source_name = uploaded_menu_image.name
+
+    if image is not None:
+        st.image(image, caption="Foto menu siap diproses", use_container_width=True)
         st.caption("Tips: pastikan tulisan dan harga terlihat jelas, hindari pantulan cahaya, dan foto satu halaman menu secara utuh.")
 
         if st.button("🔎 Baca Foto Menu", type="primary", use_container_width=True):
@@ -627,7 +660,7 @@ with comp_tab_upload:
                         seen_rows.add(key)
                 st.session_state["ocr_menu_rows"] = unique_rows
                 st.session_state["ocr_menu_raw_text"] = ocr_text
-                st.session_state["ocr_menu_source_name"] = uploaded_menu_image.name
+                st.session_state["ocr_menu_source_name"] = image_source_name
                 st.session_state["ocr_competitor_name"] = competitor_label.strip() or default_competitor
                 if unique_rows:
                     st.success(f"Ditemukan {len(unique_rows)} kandidat menu. Periksa tabel sebelum menyimpan.")
