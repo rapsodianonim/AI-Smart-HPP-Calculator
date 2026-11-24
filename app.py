@@ -534,273 +534,182 @@ st.caption("AI Smart HPP Calculator | Hasil perhitungan bergantung pada kelengka
 
 
 # ---------------------------
-# 8. Competitor Intelligence (tanpa API berbayar)
+# 8. Competitor Intelligence (upload foto sederhana, tanpa API berbayar)
 # ---------------------------
 st.divider()
 st.header("8. Competitor Intelligence")
 st.caption(
-    "Kelola data kompetitor dan harga menu dari sumber publik yang Anda verifikasi. "
-    "Modul ini tidak memerlukan Google Maps API atau API Key."
+    "Cukup unggah foto menu kompetitor. Sistem membaca nama menu dan harga dengan OCR, "
+    "lalu Anda memeriksa hasilnya sebelum disimpan. Tidak memerlukan Google Maps API atau API Key."
 )
 
-if "competitor_master" not in st.session_state:
-    st.session_state.competitor_master = []
 if "competitor_menu_prices" not in st.session_state:
     st.session_state.competitor_menu_prices = []
+if "ocr_menu_rows" not in st.session_state:
+    st.session_state.ocr_menu_rows = []
 
-comp_tab1, comp_tab2, comp_tab3 = st.tabs([
-    "🏪 Data Kompetitor", "🍜 Harga Menu", "📊 Analisis Pasar"
-])
+comp_tab_upload, comp_tab_analysis = st.tabs(["📷 Upload Menu", "📊 Analisis Pasar"])
 
-with comp_tab1:
-    st.subheader("Daftarkan Kompetitor")
-    st.caption(
-        "Cari tempat usaha secara manual melalui Google Maps atau mesin pencari, "
-        "lalu catat informasi dan tautan sumbernya di sini."
+with comp_tab_upload:
+    st.subheader("Upload Foto Menu Kompetitor")
+    st.caption("Nama restoran boleh dikosongkan. Jika kosong, sistem akan memberi nama Kompetitor 1, 2, dan seterusnya.")
+
+    saved_competitor_names = sorted({
+        str(row.get("Nama Kompetitor", "")).strip()
+        for row in st.session_state.competitor_menu_prices
+        if str(row.get("Nama Kompetitor", "")).strip()
+    })
+    default_competitor = f"Kompetitor {len(saved_competitor_names) + 1}"
+    competitor_label = st.text_input(
+        "Nama restoran / kompetitor (opsional)",
+        placeholder=f"Kosongkan untuk menggunakan {default_competitor}",
+        key="simple_competitor_name",
     )
-    with st.form("add_competitor_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            comp_name = st.text_input("Nama kompetitor *", placeholder="Contoh: Kedai Rice Bowl A")
-            comp_type = st.selectbox("Jenis usaha", ["Restoran", "Rice bowl", "Ramen", "Coffee shop", "Kafe", "Lainnya"])
-            comp_location = st.text_input("Lokasi", placeholder="Contoh: Demangan, Yogyakarta")
-        with c2:
-            comp_link = st.text_input("Tautan Google Maps / website", placeholder="https://...")
-            comp_source = st.selectbox("Jenis sumber", ["Google Maps (pencarian manual)", "Website resmi", "Menu digital resmi", "Media sosial resmi", "Sumber lain"])
-            comp_rating = st.text_input("Rating (opsional)", placeholder="Contoh: 4.7")
-        comp_notes = st.text_area("Catatan", placeholder="Contoh: Fokus menu rice bowl dan ramen")
-        comp_submit = st.form_submit_button("➕ Simpan Kompetitor", type="primary", use_container_width=True)
-    if comp_submit:
-        if not comp_name.strip():
-            st.error("Nama kompetitor wajib diisi.")
-        else:
-            st.session_state.competitor_master.append({
-                "Nama Kompetitor": comp_name.strip(),
-                "Jenis Usaha": comp_type,
-                "Lokasi": comp_location.strip(),
-                "Tautan Sumber": comp_link.strip(),
-                "Jenis Sumber": comp_source,
-                "Rating": comp_rating.strip(),
-                "Catatan": comp_notes.strip(),
-                "Tanggal Input": datetime.now().strftime("%Y-%m-%d"),
-            })
-            st.success(f"Kompetitor {comp_name.strip()} berhasil disimpan.")
-            st.rerun()
-
-    competitors = st.session_state.competitor_master
-    if competitors:
-        st.subheader("Daftar Kompetitor Tersimpan")
-        comp_df = pd.DataFrame(competitors)
-        st.dataframe(comp_df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Unduh Data Kompetitor (CSV)",
-            data=comp_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="database_kompetitor.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-        if st.button("Hapus Seluruh Data Kompetitor", key="clear_competitors"):
-            st.session_state.competitor_master = []
-            st.rerun()
-    else:
-        st.info("Belum ada kompetitor. Tambahkan kompetitor pertama melalui formulir di atas.")
-
-with comp_tab2:
-    st.subheader("Ambil Harga Menu dari Foto")
-    st.caption(
-        "Unggah foto menu kompetitor. OCR akan membaca teks dan mencoba mengenali nama menu serta harga. "
-        "Periksa dan koreksi hasilnya sebelum menyimpan ke database."
+    uploaded_menu_image = st.file_uploader(
+        "Pilih foto menu",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=False,
+        key="simple_competitor_menu_photo",
+        help="Gunakan foto yang jelas, tidak miring, dan menampilkan nama menu serta harga.",
     )
-    competitors = st.session_state.competitor_master
-    if not competitors:
-        st.warning("Daftarkan minimal satu kompetitor pada tab Data Kompetitor terlebih dahulu.")
-    else:
-        competitor_names = [x["Nama Kompetitor"] for x in competitors]
-        selected_competitor = st.selectbox(
-            "Pilih kompetitor pemilik menu",
-            competitor_names,
-            key="ocr_menu_competitor",
-        )
-        uploaded_menu_image = st.file_uploader(
-            "Unggah foto menu kompetitor",
-            type=["png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=False,
-            key="competitor_menu_photo",
-            help="Gunakan foto yang jelas, tidak miring, dan menampilkan nama menu serta harga.",
-        )
-        if uploaded_menu_image is not None:
-            image = Image.open(uploaded_menu_image).convert("RGB")
-            left, right = st.columns([1, 1])
-            with left:
-                st.image(image, caption="Foto menu yang diunggah", use_container_width=True)
-            with right:
-                st.markdown("**Tips agar pembacaan lebih akurat**")
-                st.write("- Pastikan tulisan dan harga terlihat jelas.")
-                st.write("- Hindari pantulan cahaya dan foto terlalu miring.")
-                st.write("- Unggah satu halaman menu dalam satu foto.")
-                st.write("- Hasil OCR tetap perlu diperiksa.")
 
-            if st.button("🔎 Baca Foto Menu dengan OCR", type="primary", use_container_width=True):
-                try:
-                    # Perbaikan sederhana untuk membantu Tesseract membaca foto menu.
-                    processed = ImageOps.grayscale(image)
-                    processed = ImageOps.autocontrast(processed)
-                    processed = ImageEnhance.Contrast(processed).enhance(1.6)
-                    if processed.width < 1600:
-                        scale = 1600 / processed.width
-                        processed = processed.resize((int(processed.width * scale), int(processed.height * scale)))
-                    processed = processed.filter(ImageFilter.SHARPEN)
-                    ocr_text = pytesseract.image_to_string(processed, lang="eng", config="--psm 6")
+    if uploaded_menu_image is not None:
+        image = Image.open(uploaded_menu_image).convert("RGB")
+        st.image(image, caption="Foto menu yang dipilih", use_container_width=True)
+        st.caption("Tips: pastikan tulisan dan harga terlihat jelas, hindari pantulan cahaya, dan foto satu halaman menu secara utuh.")
 
-                    # Tangkap harga seperti Rp25.000, 25.000, 25000, atau 25k.
-                    price_pattern = re.compile(
-                        r"(?:Rp\s*)?(\d{1,3}(?:[.,]\d{3})+|\d{4,6}|\d{1,3}\s? ribu|\d{1,3}\s?k)\b",
-                        re.IGNORECASE,
-                    )
-                    extracted_rows = []
-                    for raw_line in ocr_text.splitlines():
-                        line = re.sub(r"\s+", " ", raw_line).strip(" |•·-_")
-                        if not line:
-                            continue
-                        match = price_pattern.search(line)
-                        if not match:
-                            continue
-                        raw_price = match.group(1).lower().replace(" ", "")
-                        if raw_price.endswith("ribu"):
-                            price_value = int(re.sub(r"[^0-9]", "", raw_price)) * 1000
-                        elif raw_price.endswith("k"):
-                            price_value = int(re.sub(r"[^0-9]", "", raw_price)) * 1000
-                        elif "." in raw_price or "," in raw_price:
-                            price_value = int(re.sub(r"[^0-9]", "", raw_price))
-                        else:
-                            price_value = int(raw_price)
-                        menu_label = (line[:match.start()] + " " + line[match.end():]).strip(" :.-|•")
-                        menu_label = re.sub(r"\s+", " ", menu_label)
-                        if not menu_label:
-                            menu_label = "Perlu dilengkapi"
-                        if 1000 <= price_value <= 2000000:
-                            extracted_rows.append({"Nama Menu": menu_label, "Kategori": "Lainnya", "Harga (Rp)": price_value, "Catatan / Porsi": "Periksa hasil OCR"})
+        if st.button("🔎 Baca Foto Menu", type="primary", use_container_width=True):
+            try:
+                processed = ImageOps.grayscale(image)
+                processed = ImageOps.autocontrast(processed)
+                processed = ImageEnhance.Contrast(processed).enhance(1.6)
+                if processed.width < 1600:
+                    scale = 1600 / processed.width
+                    processed = processed.resize((int(processed.width * scale), int(processed.height * scale)))
+                processed = processed.filter(ImageFilter.SHARPEN)
+                ocr_text = pytesseract.image_to_string(processed, lang="eng", config="--psm 6")
 
-                    # Hilangkan baris duplikat hasil pembacaan OCR.
-                    unique_rows = []
-                    seen_rows = set()
-                    for row in extracted_rows:
-                        key = (row["Nama Menu"].lower(), row["Harga (Rp)"])
-                        if key not in seen_rows:
-                            unique_rows.append(row)
-                            seen_rows.add(key)
-                    st.session_state["ocr_menu_rows"] = unique_rows
-                    st.session_state["ocr_menu_raw_text"] = ocr_text
-                    st.session_state["ocr_menu_source_name"] = uploaded_menu_image.name
-                    if unique_rows:
-                        st.success(f"Berhasil mengenali {len(unique_rows)} baris kandidat menu. Periksa hasilnya di tabel bawah.")
+                price_pattern = re.compile(
+                    r"(?:Rp\s*)?(\d{1,3}(?:[.,]\d{3})+|\d{4,6}|\d{1,3}\s? ribu|\d{1,3}\s?k)\b",
+                    re.IGNORECASE,
+                )
+                extracted_rows = []
+                for raw_line in ocr_text.splitlines():
+                    line = re.sub(r"\s+", " ", raw_line).strip(" |•·-_")
+                    if not line:
+                        continue
+                    match = price_pattern.search(line)
+                    if not match:
+                        continue
+                    raw_price = match.group(1).lower().replace(" ", "")
+                    if raw_price.endswith("ribu") or raw_price.endswith("k"):
+                        price_value = int(re.sub(r"[^0-9]", "", raw_price)) * 1000
+                    elif "." in raw_price or "," in raw_price:
+                        price_value = int(re.sub(r"[^0-9]", "", raw_price))
                     else:
-                        st.warning("OCR belum menemukan pasangan nama menu dan harga. Coba foto yang lebih jelas atau gunakan input manual.")
-                except Exception as exc:
-                    st.error(f"OCR gagal dijalankan: {exc}. Pastikan foto berformat JPG, PNG, atau WEBP.")
+                        price_value = int(raw_price)
+                    menu_label = re.sub(r"\s+", " ", (line[:match.start()] + " " + line[match.end():]).strip(" :.-|•"))
+                    if not menu_label:
+                        menu_label = "Perlu dilengkapi"
+                    if 1000 <= price_value <= 2000000:
+                        extracted_rows.append({
+                            "Nama Menu": menu_label,
+                            "Kategori": "Lainnya",
+                            "Harga (Rp)": price_value,
+                            "Catatan / Porsi": "",
+                        })
 
-        if st.session_state.get("ocr_menu_rows"):
-            st.markdown("#### Periksa dan koreksi hasil pembacaan")
-            st.caption("Nama menu, kategori, dan harga dapat diedit langsung pada tabel sebelum disimpan.")
-            category_options = ["Rice bowl", "Ramen", "Coffee", "Non-coffee", "Makanan utama", "Snack", "Lainnya"]
-            edited_rows = st.data_editor(
-                pd.DataFrame(st.session_state["ocr_menu_rows"]),
-                use_container_width=True,
-                hide_index=True,
-                num_rows="dynamic",
-                column_config={
-                    "Nama Menu": st.column_config.TextColumn("Nama Menu", required=True),
-                    "Kategori": st.column_config.SelectboxColumn("Kategori", options=category_options, required=True),
-                    "Harga (Rp)": st.column_config.NumberColumn("Harga (Rp)", min_value=0, step=1000, format="%d", required=True),
-                    "Catatan / Porsi": st.column_config.TextColumn("Catatan / Porsi"),
-                },
-                key="ocr_menu_editor",
-            )
-            save_col, reset_col = st.columns(2)
-            with save_col:
-                if st.button("💾 Simpan Semua Hasil Terverifikasi", type="primary", use_container_width=True):
-                    valid_rows = edited_rows[
-                        edited_rows["Nama Menu"].fillna("").astype(str).str.strip().ne("")
-                        & pd.to_numeric(edited_rows["Harga (Rp)"], errors="coerce").fillna(0).gt(0)
-                    ]
-                    if valid_rows.empty:
-                        st.error("Tidak ada baris valid. Isi nama menu dan harga lebih dari Rp0.")
-                    else:
-                        for _, row in valid_rows.iterrows():
-                            st.session_state.competitor_menu_prices.append({
-                                "Nama Kompetitor": selected_competitor,
-                                "Nama Menu": str(row["Nama Menu"]).strip(),
-                                "Kategori": str(row["Kategori"]),
-                                "Harga (Rp)": int(float(row["Harga (Rp)"])),
-                                "Tautan Sumber": f"Foto menu: {st.session_state.get('ocr_menu_source_name', uploaded_menu_image.name if uploaded_menu_image else '')}",
-                                "Tanggal Pengecekan": datetime.now().strftime("%Y-%m-%d"),
-                                "Catatan": str(row.get("Catatan / Porsi", "")),
-                            })
-                        st.session_state["ocr_menu_rows"] = []
-                        st.success(f"{len(valid_rows)} harga menu berhasil disimpan untuk {selected_competitor}.")
-                        st.rerun()
-            with reset_col:
-                if st.button("Kosongkan Hasil OCR", use_container_width=True):
-                    st.session_state["ocr_menu_rows"] = []
-                    st.rerun()
-
-        with st.expander("Lihat teks mentah hasil OCR"):
-            st.text(st.session_state.get("ocr_menu_raw_text", "Belum ada hasil OCR."))
-
-        with st.expander("Tambah satu menu secara manual"):
-            with st.form("add_competitor_menu_form", clear_on_submit=True):
-                m1, m2 = st.columns(2)
-                with m1:
-                    menu_name = st.text_input("Nama menu *", placeholder="Contoh: Chicken Katsu Rice")
-                    menu_category = st.selectbox("Kategori menu", ["Rice bowl", "Ramen", "Coffee", "Non-coffee", "Makanan utama", "Snack", "Lainnya"])
-                with m2:
-                    menu_price = st.number_input("Harga menu (Rp) *", min_value=0, step=1000, value=0)
-                    menu_source_url = st.text_input("Tautan sumber (opsional)", placeholder="https://...")
-                menu_note = st.text_input("Catatan / ukuran porsi (opsional)", placeholder="Contoh: Regular, 1 porsi")
-                menu_submit = st.form_submit_button("➕ Simpan Menu Manual", use_container_width=True)
-            if menu_submit:
-                if not menu_name.strip() or menu_price <= 0:
-                    st.error("Nama menu dan harga lebih dari Rp0 wajib diisi.")
+                unique_rows, seen_rows = [], set()
+                for row in extracted_rows:
+                    key = (row["Nama Menu"].lower(), row["Harga (Rp)"])
+                    if key not in seen_rows:
+                        unique_rows.append(row)
+                        seen_rows.add(key)
+                st.session_state["ocr_menu_rows"] = unique_rows
+                st.session_state["ocr_menu_raw_text"] = ocr_text
+                st.session_state["ocr_menu_source_name"] = uploaded_menu_image.name
+                st.session_state["ocr_competitor_name"] = competitor_label.strip() or default_competitor
+                if unique_rows:
+                    st.success(f"Ditemukan {len(unique_rows)} kandidat menu. Periksa tabel sebelum menyimpan.")
                 else:
-                    st.session_state.competitor_menu_prices.append({
-                        "Nama Kompetitor": selected_competitor,
-                        "Nama Menu": menu_name.strip(),
-                        "Kategori": menu_category,
-                        "Harga (Rp)": int(menu_price),
-                        "Tautan Sumber": menu_source_url.strip(),
-                        "Tanggal Pengecekan": datetime.now().strftime("%Y-%m-%d"),
-                        "Catatan": menu_note.strip(),
-                    })
-                    st.success(f"Harga menu {menu_name.strip()} berhasil disimpan.")
-                    st.rerun()
+                    st.warning("Nama menu dan harga belum terbaca. Coba foto yang lebih jelas atau gunakan foto dengan resolusi lebih tinggi.")
+            except Exception as exc:
+                st.error(f"OCR gagal dijalankan: {exc}. Pastikan foto berformat JPG, PNG, atau WEBP.")
 
-    menu_records = st.session_state.competitor_menu_prices
-    if menu_records:
-        st.subheader("Database Harga Menu")
-        menu_df = pd.DataFrame(menu_records)
+    if st.session_state.get("ocr_menu_rows"):
+        st.markdown("#### Periksa hasil pembacaan")
+        st.caption("Koreksi nama menu atau harga yang keliru. Baris yang tidak diperlukan dapat dihapus dari tabel.")
+        category_options = ["Rice bowl", "Ramen", "Coffee", "Non-coffee", "Makanan utama", "Snack", "Lainnya"]
+        edited_rows = st.data_editor(
+            pd.DataFrame(st.session_state["ocr_menu_rows"]),
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            column_config={
+                "Nama Menu": st.column_config.TextColumn("Nama Menu", required=True),
+                "Kategori": st.column_config.SelectboxColumn("Kategori", options=category_options, required=True),
+                "Harga (Rp)": st.column_config.NumberColumn("Harga (Rp)", min_value=0, step=1000, format="%d", required=True),
+                "Catatan / Porsi": st.column_config.TextColumn("Catatan / Porsi"),
+            },
+            key="simple_ocr_menu_editor",
+        )
+        if st.button("💾 Simpan Hasil Menu", type="primary", use_container_width=True):
+            valid_rows = edited_rows[
+                edited_rows["Nama Menu"].fillna("").astype(str).str.strip().ne("")
+                & pd.to_numeric(edited_rows["Harga (Rp)"], errors="coerce").fillna(0).gt(0)
+            ]
+            if valid_rows.empty:
+                st.error("Tidak ada data valid. Pastikan nama menu dan harga sudah terisi.")
+            else:
+                competitor_to_save = st.session_state.get("ocr_competitor_name", default_competitor)
+                for _, row in valid_rows.iterrows():
+                    st.session_state.competitor_menu_prices.append({
+                        "Nama Kompetitor": competitor_to_save,
+                        "Nama Menu": str(row["Nama Menu"]).strip(),
+                        "Kategori": str(row["Kategori"]),
+                        "Harga (Rp)": int(float(row["Harga (Rp)"])),
+                        "Tautan Sumber": f"Foto menu: {st.session_state.get('ocr_menu_source_name', '')}",
+                        "Tanggal Pengecekan": datetime.now().strftime("%Y-%m-%d"),
+                        "Catatan": str(row.get("Catatan / Porsi", "")),
+                    })
+                st.session_state["ocr_menu_rows"] = []
+                st.success(f"{len(valid_rows)} menu dari {competitor_to_save} berhasil disimpan.")
+                st.rerun()
+
+        if st.button("Batalkan hasil pembacaan", use_container_width=True):
+            st.session_state["ocr_menu_rows"] = []
+            st.rerun()
+
+    with st.expander("Lihat teks yang dibaca OCR"):
+        st.text(st.session_state.get("ocr_menu_raw_text", "Belum ada hasil OCR."))
+
+    if st.session_state.competitor_menu_prices:
+        st.divider()
+        st.subheader("Data Menu yang Sudah Disimpan")
+        menu_df = pd.DataFrame(st.session_state.competitor_menu_prices)
         st.dataframe(menu_df, use_container_width=True, hide_index=True)
         st.download_button(
-            "⬇️ Unduh Harga Menu (CSV)",
+            "⬇️ Unduh Data Menu (CSV)",
             data=menu_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="database_harga_menu_kompetitor.csv",
+            file_name="data_harga_menu_kompetitor.csv",
             mime="text/csv",
             use_container_width=True,
         )
-        if st.button("Hapus Seluruh Data Harga Menu", key="clear_competitor_menu"):
+        if st.button("Hapus Seluruh Data Menu", key="clear_competitor_menu_simple"):
             st.session_state.competitor_menu_prices = []
             st.rerun()
     else:
-        st.info("Belum ada harga menu kompetitor yang disimpan.")
+        st.info("Belum ada data menu. Unggah foto menu untuk memulai.")
 
-with comp_tab3:
-    st.subheader("Perbandingan Harga Pasar")
+with comp_tab_analysis:
+    st.subheader("Analisis Harga Pasar")
     menu_records = st.session_state.competitor_menu_prices
     if not menu_records:
-        st.info("Tambahkan data harga menu pada tab Harga Menu untuk melihat analisis.")
+        st.info("Belum ada data untuk dianalisis. Unggah foto menu pada tab Upload Menu terlebih dahulu.")
     else:
         analysis_df = pd.DataFrame(menu_records)
         categories = sorted(analysis_df["Kategori"].dropna().unique().tolist())
-        selected_category = st.selectbox("Pilih kategori untuk dianalisis", categories)
+        selected_category = st.selectbox("Pilih kategori menu", categories)
         category_df = analysis_df[analysis_df["Kategori"] == selected_category].copy()
         if not category_df.empty:
             prices = pd.to_numeric(category_df["Harga (Rp)"], errors="coerce").dropna()
@@ -809,7 +718,7 @@ with comp_tab3:
             a2.metric("Harga terendah", rupiah(prices.min()))
             a3.metric("Harga median", rupiah(prices.median()))
             a4.metric("Harga tertinggi", rupiah(prices.max()))
-            st.markdown("**Rincian harga berdasarkan kompetitor**")
+            st.markdown("**Rincian harga menu**")
             st.dataframe(
                 category_df[["Nama Kompetitor", "Nama Menu", "Harga (Rp)", "Tanggal Pengecekan", "Tautan Sumber"]]
                 .sort_values("Harga (Rp)"),
@@ -822,19 +731,17 @@ with comp_tab3:
             st.markdown("**Ringkasan per kompetitor**")
             st.dataframe(by_competitor, use_container_width=True, hide_index=True)
             st.caption(
-                "Analisis ini membandingkan kategori menu secara umum, bukan memastikan produk identik. "
-                "Periksa kesamaan bahan, ukuran porsi, topping, dan kualitas sebelum menetapkan harga."
+                "Analisis kategori merupakan perbandingan awal. Pastikan jenis produk, ukuran porsi, "
+                "topping, dan kualitasnya sebanding sebelum mengambil keputusan harga."
             )
 
     st.divider()
     st.subheader("Panduan Rekomendasi Harga")
     st.write(
-        "Gunakan harga rekomendasi dari kalkulator HPP sebagai batas berbasis biaya, "
-        "kemudian bandingkan dengan median harga kompetitor untuk menilai posisi pasar. "
-        "Jangan menurunkan harga di bawah kebutuhan HPP hanya untuk mengikuti kompetitor."
+        "Bandingkan median harga pasar dengan harga rekomendasi dari kalkulator HPP. "
+        "Jangan menetapkan harga di bawah kebutuhan HPP hanya untuk mengikuti kompetitor."
     )
 
 st.caption(
-    "AI Smart HPP Calculator | Data kompetitor dan harga menu bersumber dari input pengguna; "
-    "verifikasi sumber dan tanggal harga sebelum digunakan untuk keputusan bisnis."
+    "AI Smart HPP Calculator | Data harga kompetitor berasal dari foto menu yang diunggah dan diverifikasi pengguna."
 )
