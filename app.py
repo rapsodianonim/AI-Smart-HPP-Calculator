@@ -778,3 +778,155 @@ with comp_tab_analysis:
 st.caption(
     "AI Smart HPP Calculator | Data harga kompetitor berasal dari foto menu yang diunggah dan diverifikasi pengguna."
 )
+
+# ---------------------------
+# 9. Inventory Intelligence (integrasi resep HPP + input manual)
+# ---------------------------
+st.divider()
+st.header("9. Inventory Intelligence")
+st.caption("Kelola stok, catat penjualan/pemakaian manual, dan hitung prediksi kebutuhan harian maupun mingguan.")
+
+for _key, _default in {
+    "inventory_master": {},
+    "inventory_sales": [],
+    "inventory_manual_usage": [],
+    "inventory_movements": [],
+}.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
+
+# Collect recipe usage per product from HPP calculator (converted purchase unit).
+recipe_rows = []
+for _product in st.session_state.get("saved_products", []):
+    _product_name = _product.get("nama_produk", "Produk")
+    for _material in _product.get("materials", []):
+        if _material.get("Komponen") and _material.get("Satuan valid"):
+            recipe_rows.append({
+                "Produk": _product_name,
+                "Bahan": _material["Komponen"],
+                "Pemakaian per unit": float(_material.get("Pemakaian (dikonversi)", 0)),
+                "Satuan": _material.get("Satuan isi kemasan", "gram"),
+            })
+recipe_df = pd.DataFrame(recipe_rows)
+
+inv_tab_stock, inv_tab_usage, inv_tab_forecast = st.tabs([
+    "📦 Stok Bahan Baku", "🧾 Pemakaian Bahan", "🔮 Prediksi & Pembelian"
+])
+
+with inv_tab_stock:
+    st.subheader("Master dan Saldo Stok")
+    if not recipe_df.empty:
+        st.caption("Bahan dari resep HPP terdeteksi otomatis. Tambahkan stok awal dan batas minimum untuk setiap bahan.")
+        for _material_name in sorted(recipe_df["Bahan"].dropna().unique().tolist()):
+            _units = recipe_df.loc[recipe_df["Bahan"] == _material_name, "Satuan"].dropna().unique().tolist()
+            _unit = _units[0] if _units else "gram"
+            _old = st.session_state.inventory_master.get(_material_name, {})
+            with st.expander(f"{_material_name} ({_unit})", expanded=False):
+                _x1, _x2, _x3 = st.columns(3)
+                with _x1:
+                    _opening = st.number_input("Stok tersedia", min_value=0.0, value=float(_old.get("stok", 0)), step=1.0, key=f"inv_stock_{_material_name}")
+                with _x2:
+                    _minimum = st.number_input("Batas minimum", min_value=0.0, value=float(_old.get("minimum", 0)), step=1.0, key=f"inv_min_{_material_name}")
+                with _x3:
+                    _lead = st.number_input("Lead time (hari)", min_value=0, value=int(_old.get("lead", 2)), step=1, key=f"inv_lead_{_material_name}")
+                if st.button("Simpan pengaturan stok", key=f"save_inv_{_material_name}"):
+                    st.session_state.inventory_master[_material_name] = {"stok": _opening, "minimum": _minimum, "lead": _lead, "satuan": _unit}
+                    st.success(f"Pengaturan {_material_name} disimpan.")
+    else:
+        st.info("Belum ada resep tersimpan di HPP Calculator. Hitung dan simpan minimal satu produk agar daftar bahan muncul otomatis.")
+
+    st.markdown("#### Tambah stok masuk")
+    _known_materials = sorted(set(recipe_df["Bahan"].dropna().tolist())) if not recipe_df.empty else sorted(st.session_state.inventory_master.keys())
+    if _known_materials:
+        with st.form("inventory_stock_in_form"):
+            _m1, _m2, _m3 = st.columns(3)
+            with _m1: _in_name = st.selectbox("Bahan", _known_materials, key="inv_stockin_name")
+            with _m2: _in_qty = st.number_input("Jumlah masuk", min_value=0.01, value=1.0, step=1.0, key="inv_stockin_qty")
+            with _m3: _in_note = st.text_input("Catatan (opsional)", key="inv_stockin_note")
+            _stockin_submit = st.form_submit_button("Catat stok masuk", use_container_width=True)
+        if _stockin_submit:
+            _item = st.session_state.inventory_master.setdefault(_in_name, {"stok": 0.0, "minimum": 0.0, "lead": 2, "satuan": "gram"})
+            _item["stok"] = float(_item.get("stok", 0)) + float(_in_qty)
+            st.session_state.inventory_movements.append({"Tanggal": datetime.now().strftime("%Y-%m-%d %H:%M"), "Bahan": _in_name, "Jenis": "Stok masuk", "Jumlah": _in_qty, "Catatan": _in_note})
+            st.success("Stok masuk berhasil dicatat.")
+            st.rerun()
+
+    if st.session_state.inventory_master:
+        _stock_table = pd.DataFrame([{"Bahan": k, "Stok tersedia": v.get("stok", 0), "Batas minimum": v.get("minimum", 0), "Satuan": v.get("satuan", ""), "Status": "Perlu diperiksa" if v.get("stok", 0) <= v.get("minimum", 0) else "Aman"} for k, v in st.session_state.inventory_master.items()])
+        st.dataframe(_stock_table, use_container_width=True, hide_index=True)
+
+with inv_tab_usage:
+    st.subheader("Catat Penjualan atau Pemakaian Manual")
+    st.markdown("**A. Pemakaian otomatis dari resep HPP**")
+    if not recipe_df.empty:
+        _product_names = sorted(recipe_df["Produk"].unique().tolist())
+        with st.form("inventory_sales_form"):
+            _s1, _s2 = st.columns(2)
+            with _s1: _sale_product = st.selectbox("Produk terjual", _product_names)
+            with _s2: _sale_qty = st.number_input("Jumlah terjual", min_value=1, value=1, step=1)
+            _sale_date = st.date_input("Tanggal penjualan", value=datetime.now().date())
+            _sale_submit = st.form_submit_button("Catat penjualan & hitung pemakaian", type="primary", use_container_width=True)
+        if _sale_submit:
+            _usage_for_product = recipe_df[recipe_df["Produk"] == _sale_product]
+            _entry = {"Tanggal": _sale_date.isoformat(), "Produk": _sale_product, "Jumlah terjual": int(_sale_qty)}
+            st.session_state.inventory_sales.append(_entry)
+            for _, _row in _usage_for_product.iterrows():
+                _used = float(_row["Pemakaian per unit"]) * int(_sale_qty)
+                _mat = _row["Bahan"]
+                _unit = _row["Satuan"]
+                _master = st.session_state.inventory_master.setdefault(_mat, {"stok": 0.0, "minimum": 0.0, "lead": 2, "satuan": _unit})
+                _master["stok"] = max(0.0, float(_master.get("stok", 0)) - _used)
+                st.session_state.inventory_movements.append({"Tanggal": _sale_date.isoformat(), "Bahan": _mat, "Jenis": "Pemakaian dari penjualan", "Jumlah": _used, "Catatan": f"{_sale_qty} x {_sale_product} ({_unit})"})
+            st.success("Penjualan dicatat dan stok bahan dikurangi berdasarkan resep HPP.")
+            st.rerun()
+    else:
+        st.info("Simpan resep produk terlebih dahulu di HPP Calculator untuk mengaktifkan pemakaian otomatis.")
+
+    st.markdown("**B. Koreksi pemakaian manual**")
+    _manual_materials = sorted(set(recipe_df["Bahan"].tolist())) if not recipe_df.empty else sorted(st.session_state.inventory_master.keys())
+    if _manual_materials:
+        with st.form("inventory_manual_usage_form"):
+            _u1, _u2 = st.columns(2)
+            with _u1: _manual_name = st.selectbox("Bahan yang digunakan", _manual_materials)
+            with _u2: _manual_qty = st.number_input("Jumlah pemakaian", min_value=0.01, value=1.0, step=1.0)
+            _manual_note = st.text_input("Alasan/keterangan", placeholder="Contoh: pemakaian tambahan atau bahan rusak")
+            _manual_submit = st.form_submit_button("Catat pemakaian manual", use_container_width=True)
+        if _manual_submit:
+            _master = st.session_state.inventory_master.setdefault(_manual_name, {"stok": 0.0, "minimum": 0.0, "lead": 2, "satuan": "gram"})
+            _master["stok"] = max(0.0, float(_master.get("stok", 0)) - float(_manual_qty))
+            st.session_state.inventory_manual_usage.append({"Tanggal": datetime.now().strftime("%Y-%m-%d %H:%M"), "Bahan": _manual_name, "Jumlah": _manual_qty, "Catatan": _manual_note})
+            st.session_state.inventory_movements.append({"Tanggal": datetime.now().strftime("%Y-%m-%d %H:%M"), "Bahan": _manual_name, "Jenis": "Pemakaian manual", "Jumlah": _manual_qty, "Catatan": _manual_note})
+            st.success("Pemakaian manual berhasil dicatat.")
+            st.rerun()
+
+    if st.session_state.inventory_sales:
+        st.markdown("#### Riwayat penjualan")
+        st.dataframe(pd.DataFrame(st.session_state.inventory_sales), use_container_width=True, hide_index=True)
+    if st.session_state.inventory_movements:
+        with st.expander("Riwayat pergerakan stok"):
+            st.dataframe(pd.DataFrame(st.session_state.inventory_movements), use_container_width=True, hide_index=True)
+
+with inv_tab_forecast:
+    st.subheader("Prediksi Kebutuhan dan Rekomendasi Pembelian")
+    _period_choice = st.radio("Periode prediksi", ["Harian", "Mingguan"], horizontal=True, key="inventory_forecast_period")
+    _days = 1 if _period_choice == "Harian" else 7
+    _history_days = st.number_input("Gunakan rata-rata pemakaian berapa hari?", min_value=1, max_value=90, value=7, step=1, key="inventory_history_days")
+    _forecast_rows = []
+    for _mat_name, _master in st.session_state.inventory_master.items():
+        _movement_records = [r for r in st.session_state.inventory_movements if r.get("Bahan") == _mat_name and r.get("Jenis") in ("Pemakaian dari penjualan", "Pemakaian manual")]
+        _total_used = sum(float(r.get("Jumlah", 0)) for r in _movement_records[-int(_history_days):])
+        _daily_average = _total_used / int(_history_days) if _movement_records else 0.0
+        _forecast_need = _daily_average * _days
+        _lead_time = int(_master.get("lead", 2))
+        _safety = _daily_average * 2
+        _rop = (_daily_average * _lead_time) + _safety
+        _current_stock = float(_master.get("stok", 0))
+        _buy = max(0.0, _rop - _current_stock)
+        _forecast_rows.append({"Bahan": _mat_name, "Stok tersedia": _current_stock, "Rata-rata pemakaian/hari": round(_daily_average, 2), "Prediksi kebutuhan periode": round(_forecast_need, 2), "Reorder Point": round(_rop, 2), "Rekomendasi pembelian": round(_buy, 2), "Satuan": _master.get("satuan", "")})
+    if _forecast_rows:
+        _forecast_df = pd.DataFrame(_forecast_rows)
+        st.dataframe(_forecast_df, use_container_width=True, hide_index=True)
+        st.download_button("Unduh prediksi inventory (CSV)", _forecast_df.to_csv(index=False).encode("utf-8-sig"), "prediksi_inventory.csv", "text/csv")
+        st.caption("Prediksi menggunakan rata-rata pemakaian dari catatan terakhir. Ini adalah estimasi berbasis aturan, bukan model machine learning. Safety stock diasumsikan 2 hari pemakaian.")
+    else:
+        st.info("Tambahkan stok bahan melalui pengaturan stok atau simpan resep produk pada HPP Calculator.")
