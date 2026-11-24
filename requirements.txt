@@ -4,3 +4,4 @@ reportlab
 openpyxl
 Pillow
 pytesseract
+st-img-pastebutton==0.0.6
